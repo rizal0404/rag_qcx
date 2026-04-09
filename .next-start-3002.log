@@ -1,0 +1,8 @@
+
+> rag-vercel@0.1.0 start
+> next start --port 3002
+
+▲ Next.js 16.2.2
+- Local:         http://localhost:3002
+- Network:       http://172.18.48.1:3002
+✓ Ready in 573ms
