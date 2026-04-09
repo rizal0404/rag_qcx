@@ -1,12 +1,17 @@
 'use client'
 
 import React from 'react'
+import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { useChat } from '@ai-sdk/react'
 import { DefaultChatTransport } from 'ai'
 import type { AppUIMessage, ChatSessionSummary } from '@/types/chat'
 import ChatHistorySidebar from './ChatHistorySidebar'
 import ChatMessage from './ChatMessage'
 import ChatInput from './ChatInput'
+import ChatToastStack, { type ChatToast } from './ChatToastStack'
+
+const SESSION_QUERY_PARAM = 'session'
+const LAST_SESSION_STORAGE_KEY = 'rag-chat:last-session-id'
 
 function createClientUuid(): string {
   return crypto.randomUUID()
@@ -26,7 +31,64 @@ export default function ChatInterface() {
   const [isHistoryLoading, setIsHistoryLoading] = React.useState(true)
   const [isSessionLoading, setIsSessionLoading] = React.useState(false)
   const [isHistoryOpen, setIsHistoryOpen] = React.useState(false)
+  const [busySessionId, setBusySessionId] = React.useState<string | null>(null)
+  const [toasts, setToasts] = React.useState<ChatToast[]>([])
   const scrollRef = React.useRef<HTMLDivElement>(null)
+  const hasAttemptedRestoreRef = React.useRef(false)
+  const router = useRouter()
+  const pathname = usePathname()
+  const searchParams = useSearchParams()
+
+  const syncSessionReference = React.useCallback(
+    (sessionId: string | null) => {
+      if (typeof window !== 'undefined') {
+        if (sessionId) {
+          window.localStorage.setItem(LAST_SESSION_STORAGE_KEY, sessionId)
+        } else {
+          window.localStorage.removeItem(LAST_SESSION_STORAGE_KEY)
+        }
+      }
+
+      const params = new URLSearchParams(searchParams.toString())
+
+      if (sessionId) {
+        params.set(SESSION_QUERY_PARAM, sessionId)
+      } else {
+        params.delete(SESSION_QUERY_PARAM)
+      }
+
+      const queryString = params.toString()
+      const nextUrl = queryString ? `${pathname}?${queryString}` : pathname
+      router.replace(nextUrl, { scroll: false })
+    },
+    [pathname, router, searchParams],
+  )
+
+  const clearSessionReference = React.useCallback(() => {
+    syncSessionReference(null)
+  }, [syncSessionReference])
+
+  const dismissToast = React.useCallback((toastId: string) => {
+    setToasts((current) => current.filter((toast) => toast.id !== toastId))
+  }, [])
+
+  const pushToast = React.useCallback((toast: Omit<ChatToast, 'id'>) => {
+    const id = createClientUuid()
+    setToasts((current) => [...current, { id, ...toast }])
+
+    window.setTimeout(() => {
+      setToasts((current) => current.filter((item) => item.id !== id))
+    }, 4000)
+  }, [])
+
+  const readErrorMessage = React.useCallback(async (response: Response, fallback: string) => {
+    try {
+      const payload = (await response.json()) as { error?: string }
+      return payload.error || fallback
+    } catch {
+      return fallback
+    }
+  }, [])
 
   const loadSessions = React.useCallback(async () => {
     setIsHistoryLoading(true)
@@ -50,9 +112,92 @@ export default function ChatInterface() {
     }
   }, [])
 
+  const openStoredSession = React.useCallback(
+    async (sessionId: string, closeHistory = true) => {
+      if (!sessionId || isSessionLoading) {
+        return false
+      }
+
+      if (sessionId === draftSession.id && draftSession.messages.length > 0) {
+        syncSessionReference(sessionId)
+        if (closeHistory) {
+          setIsHistoryOpen(false)
+        }
+        return true
+      }
+
+      setIsSessionLoading(true)
+
+      try {
+        const response = await fetch(`/api/chat/sessions/${sessionId}`, {
+          method: 'GET',
+          cache: 'no-store',
+        })
+
+        if (!response.ok) {
+          if (response.status === 404) {
+            clearSessionReference()
+          }
+
+          throw new Error(await response.text())
+        }
+
+        const payload = (await response.json()) as {
+          messages?: AppUIMessage[]
+          session?: { id?: string }
+        }
+
+        const nextSessionId = payload.session?.id || sessionId
+        setInput('')
+        setDraftSession({
+          id: nextSessionId,
+          messages: payload.messages ?? [],
+        })
+        syncSessionReference(nextSessionId)
+
+        if (closeHistory) {
+          setIsHistoryOpen(false)
+        }
+
+        return true
+      } catch (error) {
+        console.error(`Failed to load chat session ${sessionId}:`, error)
+        return false
+      } finally {
+        setIsSessionLoading(false)
+      }
+    },
+    [
+      clearSessionReference,
+      draftSession.id,
+      draftSession.messages.length,
+      isSessionLoading,
+      syncSessionReference,
+    ],
+  )
+
   React.useEffect(() => {
     void loadSessions()
   }, [loadSessions])
+
+  React.useEffect(() => {
+    if (hasAttemptedRestoreRef.current || isHistoryLoading) {
+      return
+    }
+
+    hasAttemptedRestoreRef.current = true
+
+    const sessionIdFromUrl = searchParams.get(SESSION_QUERY_PARAM)
+    const sessionIdFromStorage =
+      typeof window !== 'undefined'
+        ? window.localStorage.getItem(LAST_SESSION_STORAGE_KEY)
+        : null
+    const sessionToRestore = sessionIdFromUrl || sessionIdFromStorage
+
+    if (sessionToRestore) {
+      void openStoredSession(sessionToRestore, false)
+    }
+  }, [isHistoryLoading, openStoredSession, searchParams])
 
   const {
     messages,
@@ -82,6 +227,7 @@ export default function ChatInterface() {
         }))
       }
 
+      syncSessionReference(nextSessionId)
       void loadSessions()
     },
   })
@@ -119,77 +265,130 @@ export default function ChatInterface() {
     setInput('')
     setDraftSession(createDraftSession())
     setIsHistoryOpen(false)
-  }, [])
+    clearSessionReference()
+  }, [clearSessionReference])
 
   const handleSelectSession = React.useCallback(
     async (sessionId: string) => {
-      if (sessionId === draftSession.id || isSessionLoading) {
-        setIsHistoryOpen(false)
-        return
-      }
+      await openStoredSession(sessionId)
+    },
+    [openStoredSession],
+  )
 
-      setIsSessionLoading(true)
+  const handleRenameSession = React.useCallback(
+    async (sessionId: string, title: string) => {
+      setBusySessionId(sessionId)
 
       try {
         const response = await fetch(`/api/chat/sessions/${sessionId}`, {
-          method: 'GET',
-          cache: 'no-store',
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ title }),
         })
 
         if (!response.ok) {
-          throw new Error(await response.text())
+          throw new Error(await readErrorMessage(response, 'Failed to rename session'))
         }
 
-        const payload = (await response.json()) as {
-          messages?: AppUIMessage[]
-          session?: { id?: string }
-        }
-
-        setInput('')
-        setDraftSession({
-          id: payload.session?.id || sessionId,
-          messages: payload.messages ?? [],
+        await loadSessions()
+        pushToast({
+          tone: 'success',
+          title: 'Session renamed',
+          description: 'The chat title has been updated.',
         })
-        setIsHistoryOpen(false)
       } catch (error) {
-        console.error(`Failed to load chat session ${sessionId}:`, error)
+        console.error(`Failed to rename chat session ${sessionId}:`, error)
+        pushToast({
+          tone: 'error',
+          title: 'Rename failed',
+          description: error instanceof Error ? error.message : 'The session title could not be updated.',
+        })
       } finally {
-        setIsSessionLoading(false)
+        setBusySessionId(null)
       }
     },
-    [draftSession.id, isSessionLoading],
+    [loadSessions, pushToast, readErrorMessage],
+  )
+
+  const handleDeleteSession = React.useCallback(
+    async (sessionId: string) => {
+      setBusySessionId(sessionId)
+
+      try {
+        const response = await fetch(`/api/chat/sessions/${sessionId}`, {
+          method: 'DELETE',
+        })
+
+        if (!response.ok) {
+          throw new Error(await readErrorMessage(response, 'Failed to delete session'))
+        }
+
+        if (draftSession.id === sessionId) {
+          setInput('')
+          setDraftSession(createDraftSession())
+          clearSessionReference()
+        }
+
+        await loadSessions()
+        pushToast({
+          tone: 'success',
+          title: 'Session deleted',
+          description: 'The selected chat history has been removed.',
+        })
+      } catch (error) {
+        console.error(`Failed to delete chat session ${sessionId}:`, error)
+        pushToast({
+          tone: 'error',
+          title: 'Delete failed',
+          description: error instanceof Error ? error.message : 'The session could not be deleted.',
+        })
+      } finally {
+        setBusySessionId(null)
+      }
+    },
+    [clearSessionReference, draftSession.id, loadSessions, pushToast, readErrorMessage],
   )
 
   return (
-    <div className="flex h-full gap-4 lg:gap-5">
-      <div className="hidden w-[320px] shrink-0 lg:block">
+    <>
+      <ChatToastStack toasts={toasts} onDismiss={dismissToast} />
+      <div className="flex h-full gap-4 lg:gap-5">
+        <div className="hidden w-[320px] shrink-0 lg:block">
         <ChatHistorySidebar
           activeSessionId={selectedSession?.id ?? null}
+          busySessionId={busySessionId}
           isLoading={isHistoryLoading}
+          onDeleteSession={handleDeleteSession}
           onNewChat={handleNewChat}
+          onRenameSession={handleRenameSession}
           onSelectSession={handleSelectSession}
           sessions={sessions}
         />
-      </div>
-
-      {isHistoryOpen ? (
-        <div className="fixed inset-0 z-40 bg-[#02040b]/80 backdrop-blur-sm lg:hidden">
-          <div className="absolute inset-y-0 left-0 w-[88vw] max-w-sm p-4">
-            <ChatHistorySidebar
-              activeSessionId={selectedSession?.id ?? null}
-              isLoading={isHistoryLoading}
-              onClose={() => setIsHistoryOpen(false)}
-              onNewChat={handleNewChat}
-              onSelectSession={handleSelectSession}
-              sessions={sessions}
-              title="Sessions"
-            />
-          </div>
         </div>
-      ) : null}
 
-      <div className="min-w-0 flex-1">
-        <div className="flex h-full flex-col overflow-hidden rounded-[2rem] glass-panel transition-all duration-300">
+        {isHistoryOpen ? (
+          <div className="fixed inset-0 z-40 bg-[#02040b]/80 backdrop-blur-sm lg:hidden">
+            <div className="absolute inset-y-0 left-0 w-[88vw] max-w-sm p-4">
+              <ChatHistorySidebar
+                activeSessionId={selectedSession?.id ?? null}
+                busySessionId={busySessionId}
+                isLoading={isHistoryLoading}
+                onClose={() => setIsHistoryOpen(false)}
+                onDeleteSession={handleDeleteSession}
+                onNewChat={handleNewChat}
+                onRenameSession={handleRenameSession}
+                onSelectSession={handleSelectSession}
+                sessions={sessions}
+                title="Sessions"
+              />
+            </div>
+          </div>
+        ) : null}
+
+        <div className="min-w-0 flex-1">
+          <div className="flex h-full flex-col overflow-hidden rounded-[2rem] glass-panel transition-all duration-300">
           <div className="relative flex items-center justify-between border-b border-white/5 bg-white/5 px-4 py-4 shadow-sm backdrop-blur-md sm:px-6">
             <div className="absolute inset-x-0 bottom-0 h-[1px] bg-gradient-to-r from-transparent via-indigo-500/50 to-transparent"></div>
 
@@ -309,8 +508,9 @@ export default function ChatInterface() {
               isLoading={isLoading || isSessionLoading}
             />
           </div>
+          </div>
         </div>
       </div>
-    </div>
+    </>
   )
 }

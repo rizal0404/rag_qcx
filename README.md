@@ -86,6 +86,10 @@ NEXT_PUBLIC_SUPABASE_URL=https://xxxx.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJxxxx
 SUPABASE_SERVICE_ROLE_KEY=eyJxxxx
 
+# Admin auth
+ADMIN_BASIC_AUTH_USERNAME=admin
+ADMIN_BASIC_AUTH_PASSWORD=change-this-password
+
 # External parser options
 LLAMAPARSE_API_KEY=llx-xxxx
 # DOCLING_WORKER_URL=https://your-worker.railway.app
@@ -110,6 +114,7 @@ Notes:
 - `EMBEDDING_PROVIDER=auto` keeps that provider order. You can force `openrouter`, `openai`, or `local` if needed.
 - `EMBEDDING_VECTOR_DIMENSIONS` should match the pgvector column size. The default schema now uses `1024` for `bge-m3`.
 - `SUPABASE_SERVICE_ROLE_KEY` is required for upload, ingestion, and admin-side operations.
+- `ADMIN_BASIC_AUTH_USERNAME` and `ADMIN_BASIC_AUTH_PASSWORD` are required to access `/admin`, `/api/documents`, `/api/ingest/*`, and `/api/chat/sessions/*`.
 - `LLAMAPARSE_API_KEY` and `DOCLING_WORKER_URL` are optional until you connect an external parser.
 - After changing `EMBEDDING_MODEL`, re-ingest documents so stored chunk vectors and query vectors come from the same model family.
 
@@ -333,6 +338,8 @@ Displays:
 - document list
 - processing summary cards
 - recent ingestion activity
+
+Access is protected by HTTP Basic Auth via `ADMIN_BASIC_AUTH_USERNAME` and `ADMIN_BASIC_AUTH_PASSWORD`.
 
 ### `/admin/upload`
 Allows:

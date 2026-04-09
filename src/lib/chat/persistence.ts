@@ -16,6 +16,11 @@ function buildSessionTitle(queryText: string): string {
   return normalized.length > 80 ? `${normalized.slice(0, 77)}...` : normalized
 }
 
+function sanitizeSessionTitle(title: string): string {
+  const normalized = normalizeWhitespace(title)
+  return normalized.length > 120 ? `${normalized.slice(0, 117)}...` : normalized
+}
+
 function trimPreview(content: string | null | undefined): string | null {
   if (!content) {
     return null
@@ -287,4 +292,34 @@ export async function loadChatSessionMessages(sessionId: string): Promise<AppUIM
           : undefined,
     }
   })
+}
+
+export async function renameChatSession(sessionId: string, title: string): Promise<void> {
+  const supabase = createAdminClient()
+  const sanitizedTitle = sanitizeSessionTitle(title)
+
+  if (!sanitizedTitle) {
+    throw new Error('Session title cannot be empty')
+  }
+
+  const { error } = await supabase
+    .from('chat_sessions')
+    .update({
+      title: sanitizedTitle,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', sessionId)
+
+  if (error) {
+    throw new Error(`Failed to rename chat session: ${error.message}`)
+  }
+}
+
+export async function deleteChatSession(sessionId: string): Promise<void> {
+  const supabase = createAdminClient()
+  const { error } = await supabase.from('chat_sessions').delete().eq('id', sessionId)
+
+  if (error) {
+    throw new Error(`Failed to delete chat session: ${error.message}`)
+  }
 }
