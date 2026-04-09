@@ -1,3 +1,24 @@
+export type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonObject
+  | JsonValue[]
+
+export interface JsonObject {
+  [key: string]: JsonValue
+}
+
+export type ChunkMetadata = JsonObject & {
+  documentTitle?: string
+  documentNumber?: string
+  revision?: string | null
+  equipmentModel?: string | null
+  keywords?: string[]
+  llm_summary?: string
+}
+
 export type DocumentStatus = 'UPLOADED' | 'EXTRACTING' | 'EXTRACTED' | 'PROCESSING' | 'EMBEDDING' | 'ACTIVE' | 'ERROR' | 'INACTIVE'
 
 export interface Document {
@@ -27,7 +48,7 @@ export interface Chunk {
   content_type: ContentType
   section_path: string | null
   page_numbers: number[]
-  metadata: Record<string, any>
+  metadata: ChunkMetadata
   embedding: number[] | null
   created_at: string
 }
@@ -41,7 +62,7 @@ export interface DocumentImage {
   file_path: string
   image_type: ImageType
   vlm_description: string | null
-  callouts: Record<string, any> | null
+  callouts: JsonObject | null
   page_number: number | null
   created_at: string
 }
@@ -60,7 +81,7 @@ export interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
   cited_chunk_ids: string[]
-  cited_images: Record<string, any> | null
+  cited_images: JsonValue[] | null
   is_fallback: boolean
   created_at: string
 }

@@ -1,5 +1,10 @@
 import { createAdminClient } from '@/lib/supabase/admin'
-import type { ChatMessage as StoredChatMessage, ChatSession as StoredChatSession } from '@/types/database'
+import type {
+  ChatMessage as StoredChatMessage,
+  ChatSession as StoredChatSession,
+  Chunk,
+  Document,
+} from '@/types/database'
 import type { AppUIMessage, ChatSessionSummary, Citation, ImageRef } from '@/types/chat'
 
 function normalizeWhitespace(value: string): string {
@@ -44,8 +49,8 @@ function parseStoredImages(value: unknown): ImageRef[] | undefined {
 }
 
 function buildCitationFromChunk(
-  chunk: Record<string, any>,
-  document: Record<string, any> | undefined,
+  chunk: Pick<Chunk, 'id' | 'document_id' | 'section_path' | 'page_numbers' | 'metadata'>,
+  document: Pick<Document, 'title' | 'doc_number'> | undefined,
 ): Citation {
   return {
     chunkId: chunk.id,
@@ -169,7 +174,10 @@ export async function listChatSessions(limit = 50): Promise<ChatSessionSummary[]
     throw new Error(`Failed to load chat session previews: ${messagesError.message}`)
   }
 
-  const latestMessageBySession = new Map<string, Record<string, any>>()
+  const latestMessageBySession = new Map<
+    string,
+    Pick<StoredChatMessage, 'session_id' | 'role' | 'content' | 'created_at'>
+  >()
 
   for (const message of messages || []) {
     if (!latestMessageBySession.has(message.session_id)) {
@@ -211,8 +219,11 @@ export async function loadChatSessionMessages(sessionId: string): Promise<AppUIM
     new Set(typedMessages.flatMap((message) => message.cited_chunk_ids || [])),
   )
 
-  const chunkMap = new Map<string, Record<string, any>>()
-  const documentMap = new Map<string, Record<string, any>>()
+  const chunkMap = new Map<
+    string,
+    Pick<Chunk, 'id' | 'document_id' | 'section_path' | 'page_numbers' | 'metadata'>
+  >()
+  const documentMap = new Map<string, Pick<Document, 'id' | 'title' | 'doc_number'>>()
 
   if (citedChunkIds.length > 0) {
     const { data: chunks, error: chunksError } = await supabase

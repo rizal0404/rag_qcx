@@ -261,8 +261,8 @@ export default function ChatInterface() {
                     Ask about specifications, safety procedures, or request diagrams from the manual. I will cite the exact sources for you.
                   </p>
                   <div className="mt-6 flex flex-wrap justify-center gap-2">
-                    <span className="rounded-full border border-white/5 bg-white/5 px-3 py-1 text-xs text-slate-300">"PLC supply voltage?"</span>
-                    <span className="rounded-full border border-white/5 bg-white/5 px-3 py-1 text-xs text-slate-300">"Diverter dimensions?"</span>
+                    <span className="rounded-full border border-white/5 bg-white/5 px-3 py-1 text-xs text-slate-300">&ldquo;PLC supply voltage?&rdquo;</span>
+                    <span className="rounded-full border border-white/5 bg-white/5 px-3 py-1 text-xs text-slate-300">&ldquo;Diverter dimensions?&rdquo;</span>
                   </div>
                 </div>
               </div>

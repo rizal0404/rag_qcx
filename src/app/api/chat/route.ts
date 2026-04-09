@@ -456,9 +456,11 @@ export async function POST(req: Request) {
     return createUIMessageStreamResponse({
       stream,
     })
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('API /chat Error:', error)
-    return new Response(JSON.stringify({ error: error.message || 'Internal Server Error' }), { 
+    const message = error instanceof Error ? error.message : 'Internal Server Error'
+
+    return new Response(JSON.stringify({ error: message }), { 
       status: 500,
       headers: { 'Content-Type': 'application/json' }
     })

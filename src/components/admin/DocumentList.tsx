@@ -26,28 +26,28 @@ export default function DocumentList({ refreshKey = 0, onRefresh }: DocumentList
   const [loading, setLoading] = useState(true)
   const [runningDocumentId, setRunningDocumentId] = useState<string | null>(null)
   const [feedback, setFeedback] = useState<{ tone: 'success' | 'error'; message: string } | null>(null)
-  const supabase = createClient()
 
   useEffect(() => {
+    async function fetchDocuments() {
+      try {
+        setLoading(true)
+        const supabase = createClient()
+        const { data, error } = await supabase
+          .from('documents')
+          .select('*')
+          .order('created_at', { ascending: false })
+
+        if (error) throw error
+        setDocuments(data || [])
+      } catch (err) {
+        console.error('Failed to fetch documents:', err)
+      } finally {
+        setLoading(false)
+      }
+    }
+
     void fetchDocuments()
   }, [refreshKey])
-
-  const fetchDocuments = async () => {
-    try {
-      setLoading(true)
-      const { data, error } = await supabase
-        .from('documents')
-        .select('*')
-        .order('created_at', { ascending: false })
-      
-      if (error) throw error
-      setDocuments(data || [])
-    } catch (err) {
-      console.error('Failed to fetch documents:', err)
-    } finally {
-      setLoading(false)
-    }
-  }
 
   const handleRunIngestion = async (documentId: string, title: string) => {
     try {

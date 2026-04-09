@@ -1,4 +1,5 @@
 import { createAdminClient } from '../supabase/admin'
+import type { ChunkMetadata } from '@/types/database'
 import { rerankSearchResults } from './query'
 import { applyRemoteRerank, getRerankCandidateCount } from './rerank'
 
@@ -10,7 +11,7 @@ export interface SearchResult {
   content_type: string
   section_path: string | null
   page_numbers: number[]
-  metadata: Record<string, any>
+  metadata: ChunkMetadata
   similarity: number
   keyword_rank: number
   combined_score: number
