@@ -1,4 +1,20 @@
-import ChatInterface from "@/components/chat/ChatInterface";
+import { Suspense } from 'react'
+import ChatInterface from '@/components/chat/ChatInterface'
+
+function ChatInterfaceFallback() {
+  return (
+    <div className="glass-panel flex h-full items-center justify-center overflow-hidden rounded-[2rem] border border-white/8 bg-black/20">
+      <div className="rounded-3xl border border-white/10 bg-black/30 px-6 py-5 text-center backdrop-blur-xl">
+        <div className="mx-auto flex w-fit items-center gap-2">
+          <span className="typing-dot h-2 w-2 rounded-full bg-cyan-400"></span>
+          <span className="typing-dot h-2 w-2 rounded-full bg-indigo-400"></span>
+          <span className="typing-dot h-2 w-2 rounded-full bg-violet-400"></span>
+        </div>
+        <div className="mt-4 text-sm font-medium text-slate-200">Preparing chat workspace...</div>
+      </div>
+    </div>
+  )
+}
 
 export default function Home() {
   return (
@@ -28,9 +44,11 @@ export default function Home() {
         </header>
 
         <div className="flex-1 overflow-hidden transition-all duration-500 animate-fade-in-up" style={{ animationDelay: '0.1s' }}>
-          <ChatInterface />
+          <Suspense fallback={<ChatInterfaceFallback />}>
+            <ChatInterface />
+          </Suspense>
         </div>
       </div>
     </main>
-  );
+  )
 }
