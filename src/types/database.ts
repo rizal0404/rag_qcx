@@ -30,6 +30,7 @@ export interface Document {
   equipment_model: string | null
   language: string
   file_path: string
+  file_size_bytes: number | null
   total_pages: number | null
   total_chunks: number
   status: DocumentStatus

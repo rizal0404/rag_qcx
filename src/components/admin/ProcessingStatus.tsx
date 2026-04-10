@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useEffect, useState } from 'react'
-import { createClient } from '@/lib/supabase/client'
+import type { Document } from '@/types/database'
 
 interface StatusSummary {
   total: number
@@ -24,38 +24,39 @@ export default function ProcessingStatus({ refreshKey = 0 }: ProcessingStatusPro
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    const supabase = createClient()
-
     const loadSummary = async () => {
       setLoading(true)
 
-      const { data, error } = await supabase.from('documents').select('status')
+      try {
+        const res = await fetch('/api/documents')
+        if (!res.ok) throw new Error('Failed to load processing summary')
 
-      if (error) {
+        const json = await res.json()
+        const data = (json.documents || []) as Document[]
+
+        const nextSummary = data.reduce<StatusSummary>(
+          (accumulator, document) => {
+            accumulator.total += 1
+
+            if (document.status === 'ACTIVE') {
+              accumulator.active += 1
+            } else if (['PROCESSING', 'EXTRACTING', 'EMBEDDING'].includes(document.status)) {
+              accumulator.processing += 1
+            } else if (document.status === 'ERROR') {
+              accumulator.errored += 1
+            }
+
+            return accumulator
+          },
+          { total: 0, active: 0, processing: 0, errored: 0 },
+        )
+
+        setSummary(nextSummary)
+      } catch (error) {
         console.error('Failed to load processing summary:', error)
+      } finally {
         setLoading(false)
-        return
       }
-
-      const nextSummary = (data || []).reduce<StatusSummary>(
-        (accumulator, document) => {
-          accumulator.total += 1
-
-          if (document.status === 'ACTIVE') {
-            accumulator.active += 1
-          } else if (['PROCESSING', 'EXTRACTING', 'EMBEDDING'].includes(document.status)) {
-            accumulator.processing += 1
-          } else if (document.status === 'ERROR') {
-            accumulator.errored += 1
-          }
-
-          return accumulator
-        },
-        { total: 0, active: 0, processing: 0, errored: 0 },
-      )
-
-      setSummary(nextSummary)
-      setLoading(false)
     }
 
     void loadSummary()

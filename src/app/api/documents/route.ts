@@ -53,6 +53,7 @@ export async function POST(req: NextRequest) {
         doc_number: docNumber || null,
         equipment_model: equipmentModel || null,
         file_path: filePath,
+        file_size_bytes: file.size,
         status: "UPLOADED",
         doc_type: "manual",
         language: "en",

@@ -1,4 +1,5 @@
 import { createAdminClient } from '@/lib/supabase/admin'
+import { extractInlineCitations, isCitationReferencedInline } from '@/lib/chat/citations'
 import type {
   ChatMessage as StoredChatMessage,
   ChatSession as StoredChatSession,
@@ -265,17 +266,21 @@ export async function loadChatSessionMessages(sessionId: string): Promise<AppUIM
   }
 
   return typedMessages.map((message) => {
-    const citations = (message.cited_chunk_ids || [])
-      .map((chunkId) => {
+    const inlineCitations = extractInlineCitations(message.content)
+    const citations: Citation[] = (message.cited_chunk_ids || []).flatMap((chunkId) => {
         const chunk = chunkMap.get(chunkId)
 
         if (!chunk) {
-          return null
+          return []
         }
 
-        return buildCitationFromChunk(chunk, documentMap.get(chunk.document_id))
+        const citation = buildCitationFromChunk(chunk, documentMap.get(chunk.document_id))
+
+        return [{
+          ...citation,
+          isInlineReferenced: isCitationReferencedInline(citation, inlineCitations),
+        }]
       })
-      .filter((citation): citation is Citation => citation !== null)
 
     return {
       id: message.id,

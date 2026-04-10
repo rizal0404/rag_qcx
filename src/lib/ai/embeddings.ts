@@ -1,11 +1,16 @@
 import crypto from 'node:crypto'
 import { embed, embedMany } from 'ai'
 import { hasUsableApiKey, openRouterOpenAI, openai } from './llm'
+import { getCachedEmbedding, setCachedEmbedding } from './embeddingCache'
 
-const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL || 'baai/bge-m3'
 const EMBEDDING_PROVIDER = (process.env.EMBEDDING_PROVIDER || 'auto').trim().toLowerCase()
 const VECTOR_DIMENSIONS = parseInt(process.env.EMBEDDING_VECTOR_DIMENSIONS || '1024', 10)
 const LOCAL_EMBEDDING_DIMENSIONS = VECTOR_DIMENSIONS
+const LEGACY_EMBEDDING_MODEL = process.env.EMBEDDING_MODEL?.trim()
+const OPENROUTER_EMBEDDING_MODEL =
+  process.env.OPENROUTER_EMBEDDING_MODEL?.trim() || LEGACY_EMBEDDING_MODEL || 'baai/bge-m3'
+const OPENAI_EMBEDDING_MODEL =
+  process.env.OPENAI_EMBEDDING_MODEL?.trim() || 'text-embedding-3-large'
 const warnedDimensions = new Set<string>()
 
 type EmbeddingProvider = 'openrouter' | 'openai' | 'local'
@@ -14,6 +19,11 @@ interface EmbeddingModelCandidate {
   provider: EmbeddingProvider
   modelId: string
   model: ReturnType<typeof openai.embedding>
+  providerOptions?: {
+    openai?: {
+      dimensions?: number
+    }
+  }
 }
 
 const MULTILINGUAL_HINT_GROUPS = [
@@ -76,11 +86,11 @@ function alignVectorDimensions(vector: number[]): number[] {
     }
   }
 
-  const warningKey = `${EMBEDDING_MODEL}:${vector.length}->${VECTOR_DIMENSIONS}`
+  const warningKey = `${vector.length}->${VECTOR_DIMENSIONS}`
 
   if (!warnedDimensions.has(warningKey)) {
     console.warn(
-      `Embedding dimension mismatch for ${EMBEDDING_MODEL}: received ${vector.length}, aligned to ${VECTOR_DIMENSIONS}. Re-ingest documents after changing embedding model.`,
+      `Embedding dimension mismatch: received ${vector.length}, aligned to ${VECTOR_DIMENSIONS}. Re-ingest documents after changing embedding model family or dimensions.`,
     )
     warnedDimensions.add(warningKey)
   }
@@ -114,6 +124,14 @@ function getEmbeddingModelCandidates(): EmbeddingModelCandidate[] {
   const candidates: EmbeddingModelCandidate[] = []
   const hasOpenRouterKey = hasUsableApiKey(process.env.OPENROUTER_API_KEY)
   const hasOpenAiKey = hasUsableApiKey(process.env.OPENAI_API_KEY)
+  const openAiProviderOptions =
+    /^text-embedding-3-(small|large)$/.test(OPENAI_EMBEDDING_MODEL)
+      ? {
+          openai: {
+            dimensions: VECTOR_DIMENSIONS,
+          },
+        }
+      : undefined
 
   const pushOpenRouter = () => {
     if (!hasOpenRouterKey) {
@@ -122,8 +140,8 @@ function getEmbeddingModelCandidates(): EmbeddingModelCandidate[] {
 
     candidates.push({
       provider: 'openrouter',
-      modelId: EMBEDDING_MODEL,
-      model: openRouterOpenAI.embedding(EMBEDDING_MODEL),
+      modelId: OPENROUTER_EMBEDDING_MODEL,
+      model: openRouterOpenAI.embedding(OPENROUTER_EMBEDDING_MODEL),
     })
   }
 
@@ -134,8 +152,9 @@ function getEmbeddingModelCandidates(): EmbeddingModelCandidate[] {
 
     candidates.push({
       provider: 'openai',
-      modelId: EMBEDDING_MODEL,
-      model: openai.embedding(EMBEDDING_MODEL),
+      modelId: OPENAI_EMBEDDING_MODEL,
+      model: openai.embedding(OPENAI_EMBEDDING_MODEL),
+      providerOptions: openAiProviderOptions,
     })
   }
 
@@ -167,6 +186,7 @@ async function generateRemoteEmbedding(
   const { embedding } = await embed({
     model: candidate.model,
     value: normalizeInput(value),
+    providerOptions: candidate.providerOptions,
   })
 
   return alignVectorDimensions(embedding)
@@ -179,21 +199,32 @@ async function generateRemoteEmbeddings(
   const { embeddings } = await embedMany({
     model: candidate.model,
     values: values.map(normalizeInput),
+    providerOptions: candidate.providerOptions,
   })
 
   return embeddings.map(alignVectorDimensions)
 }
 
 export async function generateEmbedding(value: string): Promise<number[]> {
+  const normalizedValue = normalizeInput(value)
+
+  // Check cache first to avoid redundant API round-trips
+  const cached = getCachedEmbedding(normalizedValue)
+  if (cached) return cached
+
   const candidates = getEmbeddingModelCandidates()
 
   if (candidates.length === 0) {
-    return generateLocalEmbedding(value)
+    const embedding = generateLocalEmbedding(normalizedValue)
+    setCachedEmbedding(normalizedValue, embedding)
+    return embedding
   }
 
   for (const candidate of candidates) {
     try {
-      return await generateRemoteEmbedding(candidate, value)
+      const embedding = await generateRemoteEmbedding(candidate, normalizedValue)
+      setCachedEmbedding(normalizedValue, embedding)
+      return embedding
     } catch (error) {
       console.warn(
         `Falling back from ${candidate.provider} embedding model ${candidate.modelId} for single value:`,
@@ -202,7 +233,9 @@ export async function generateEmbedding(value: string): Promise<number[]> {
     }
   }
 
-  return generateLocalEmbedding(value)
+  const embedding = generateLocalEmbedding(normalizedValue)
+  setCachedEmbedding(normalizedValue, embedding)
+  return embedding
 }
 
 export async function generateEmbeddings(values: string[]): Promise<number[][]> {

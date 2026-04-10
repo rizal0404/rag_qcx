@@ -1,5 +1,31 @@
 import { NextRequest, NextResponse } from 'next/server'
 
+// --- Rate limiting state ---
+const RATE_LIMIT_WINDOW_MS = 60_000 // 1 minute
+const RATE_LIMIT_MAX_REQUESTS = 15
+const rateLimitStore = new Map<string, { count: number; resetAt: number }>()
+
+function getClientIp(request: NextRequest): string {
+  return (
+    request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
+    request.headers.get('x-real-ip') ||
+    'unknown'
+  )
+}
+
+function isRateLimited(ip: string): boolean {
+  const now = Date.now()
+  const entry = rateLimitStore.get(ip)
+
+  if (!entry || now >= entry.resetAt) {
+    rateLimitStore.set(ip, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS })
+    return false
+  }
+
+  entry.count += 1
+  return entry.count > RATE_LIMIT_MAX_REQUESTS
+}
+
 function isApiRequest(pathname: string): boolean {
   return pathname.startsWith('/api/')
 }
@@ -82,6 +108,18 @@ function misconfiguredResponse(request: NextRequest): NextResponse {
 }
 
 export function middleware(request: NextRequest) {
+  const pathname = request.nextUrl.pathname
+
+  // Chat API: Rate limiting (no basic auth required)
+  if (pathname === '/api/chat') {
+    const ip = getClientIp(request)
+    if (isRateLimited(ip)) {
+      return NextResponse.json({ error: 'Too many requests' }, { status: 429 })
+    }
+    return NextResponse.next()
+  }
+
+  // Admin Area: Basic Authentication
   const credentials = getAdminCredentials()
 
   if (!credentials) {
@@ -106,5 +144,6 @@ export const config = {
     '/api/documents/:path*',
     '/api/ingest/:path*',
     '/api/chat/sessions/:path*',
+    '/api/chat',
   ],
 }

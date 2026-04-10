@@ -1,90 +1,59 @@
 import { NextRequest, NextResponse } from 'next/server'
 import {
-  buildTextIngestionPayload,
-  getDocumentForIngestion,
-  prepareChunksForIngestion,
-  runIngestionPipeline,
-  type RawIngestionElement,
-} from '@/lib/ingestion/pipeline'
-import { parseDocumentWithLlamaParse } from '@/lib/ingestion/llamaParse'
-import { createAdminClient } from '@/lib/supabase/admin'
+  executeLocalIngestionRequest,
+  resolveDocumentForIngestion,
+  updateDocumentStatus,
+} from '@/lib/ingestion/execute'
+import { dispatchIngestionToWorker, resolveIngestionExecutionMode } from '@/lib/ingestion/worker'
+import type { ProcessIngestionRequest } from '@/types/ingestion'
 
 export const maxDuration = 300
 
 export async function POST(req: NextRequest) {
   try {
+    const requestPayload = (await req.json()) as ProcessIngestionRequest
     const {
       documentId,
-      elements,
-      chunks,
-      text,
-      sectionPath,
-      pageNumbers,
-      contentType,
-    }: {
-      documentId?: string
-      elements?: RawIngestionElement[]
-      chunks?: RawIngestionElement[]
-      text?: string
-      sectionPath?: string | null
-      pageNumbers?: number[]
-      contentType?: RawIngestionElement['content_type']
-    } = await req.json()
+    } = requestPayload
 
     if (!documentId) {
       return NextResponse.json({ error: 'documentId is required' }, { status: 400 })
     }
 
-    const document = await getDocumentForIngestion(documentId)
+    const document = await resolveDocumentForIngestion(documentId)
 
     if (!document) {
       return NextResponse.json({ error: 'Document not found' }, { status: 404 })
     }
 
-    const supabase = createAdminClient()
-    const hasElements = Array.isArray(elements) && elements.length > 0
-    const hasChunks = Array.isArray(chunks) && chunks.length > 0
-    const hasText = typeof text === 'string' && text.trim().length > 0
-    const shouldParseWithLlamaParse = !hasElements && !hasChunks && !hasText
+    const executionMode = resolveIngestionExecutionMode(document, requestPayload)
 
-    if (shouldParseWithLlamaParse) {
-      await supabase
-        .from('documents')
-        .update({ status: 'EXTRACTING', updated_at: new Date().toISOString() })
-        .eq('id', documentId)
+    if (executionMode === 'worker') {
+      try {
+        const dispatchResult = await dispatchIngestionToWorker({
+          ...requestPayload,
+          documentId,
+        })
+
+        await updateDocumentStatus(documentId, dispatchResult.queuedStatus)
+
+        return NextResponse.json(dispatchResult, { status: 202 })
+      } catch (error) {
+        await updateDocumentStatus(documentId, 'ERROR')
+        const message = error instanceof Error ? error.message : 'Failed to dispatch ingestion job to worker'
+        return NextResponse.json({ error: message }, { status: 502 })
+      }
     }
 
-    const rawElements = hasElements
-      ? elements
-      : hasChunks
-        ? chunks
-        : hasText
-          ? buildTextIngestionPayload({
-              text,
-              sectionPath,
-              pageNumbers,
-              contentType,
-            })
-          : await parseDocumentWithLlamaParse(document)
-
-    if (!rawElements) {
-      return NextResponse.json(
-        {
-          error: 'No ingestion payload provided.',
-          hint:
-            'Provide elements/chunks from an external parser, or send text for a lightweight ingestion run.',
-        },
-        { status: 400 },
-      )
-    }
-
-    const preparedChunks = prepareChunksForIngestion(document, rawElements)
-    const result = await runIngestionPipeline(documentId, preparedChunks)
+    const result = await executeLocalIngestionRequest({
+      ...requestPayload,
+      documentId,
+      executionMode: 'inline',
+    })
 
     return NextResponse.json({
-      success: result.status !== 'FAILED',
-      result,
-      preparedChunkCount: preparedChunks.length,
+      ...result,
+      executionMode: 'inline',
     })
   } catch (error) {
     console.error('Process ingestion error:', error)
@@ -101,11 +70,7 @@ export async function POST(req: NextRequest) {
 
     if (requestDocumentId) {
       try {
-        const supabase = createAdminClient()
-        await supabase
-          .from('documents')
-          .update({ status: 'ERROR', updated_at: new Date().toISOString() })
-          .eq('id', requestDocumentId)
+        await updateDocumentStatus(requestDocumentId, 'ERROR')
       } catch (statusError) {
         console.error('Failed to update document status after ingestion error:', statusError)
       }

@@ -59,7 +59,11 @@ export default function ChatMessage({ message, customData }: ChatMessageProps) {
 
           <div className={`prose prose-sm max-w-none ${isAssistant ? 'chat-markdown' : 'text-white'}`}>
             {isAssistant ? (
-              <MarkdownRenderer content={textContent} />
+              <MarkdownRenderer
+                content={textContent}
+                citations={customData?.citations}
+                onCitationClick={(citationIndex) => setSelectedCitationIndex(citationIndex)}
+              />
             ) : (
               <div className="whitespace-pre-wrap leading-relaxed">{textContent}</div>
             )}

@@ -103,17 +103,77 @@ export async function runIngestionPipeline(
         continue
       }
 
+      // -----------------------------------------------------------------
+      // Split the batch into two groups:
+      //   directInsertChunks — simple chunks with no parent ref or image
+      //     → can be bulk-inserted in a single round-trip
+      //   sequentialChunks   — chunks that need their DB id back
+      //      (those with chunk_ref for parent tracking, or image_data)
+      //     → inserted one at a time (existing logic)
+      // -----------------------------------------------------------------
+      type ChunkWithEmbedding = { chunk: IngestedChunk; embedding: number[] }
+      const directInsertRows: {
+        document_id: string
+        parent_chunk_id: string | null
+        content: string
+        content_type: string
+        section_path: string | null
+        page_numbers: number[]
+        metadata: Record<string, unknown>
+        embedding: number[]
+      }[] = []
+      const sequentialChunks: ChunkWithEmbedding[] = []
+
       for (let batchIndex = 0; batchIndex < batch.length; batchIndex += 1) {
         const chunk = batch[batchIndex]
         const embedding = embeddings[batchIndex]
+        const needsTracking = chunk.chunk_ref || chunk.image_data
+
+        if (needsTracking) {
+          sequentialChunks.push({ chunk, embedding })
+          continue
+        }
+
         const resolvedParentId =
           chunk.parent_chunk_id ??
           (chunk.parent_ref ? parentReferenceMap.get(chunk.parent_ref) || null : null)
 
-        const chunkMetadata = {
-          ...chunk.metadata,
-        }
+        const chunkMetadata = { ...chunk.metadata }
+        delete chunkMetadata.chunk_role
 
+        directInsertRows.push({
+          document_id: documentId,
+          parent_chunk_id: resolvedParentId,
+          content: chunk.content,
+          content_type: chunk.content_type,
+          section_path: chunk.section_path,
+          page_numbers: chunk.page_numbers,
+          metadata: chunkMetadata,
+          embedding,
+        })
+      }
+
+      // Bulk insert for simple chunks (1 round-trip per batch)
+      if (directInsertRows.length > 0) {
+        const { data: bulkData, error: bulkError } = await supabase
+          .from('chunks')
+          .insert(directInsertRows)
+          .select('id')
+
+        if (bulkError) {
+          errors.push(`Batch insert error: ${bulkError.message}`)
+        } else {
+          totalChunks += bulkData?.length ?? 0
+        }
+      }
+
+      // Sequential insert for tracked chunks (need returned IDs)
+      for (const { chunk, embedding } of sequentialChunks) {
+        const resolvedParentId =
+          chunk.parent_chunk_id ??
+          (chunk.parent_ref ? parentReferenceMap.get(chunk.parent_ref) || null : null)
+
+        const chunkMetadata = { ...chunk.metadata }
         delete chunkMetadata.chunk_role
 
         const { data: insertedChunk, error: chunkError } = await supabase
@@ -163,7 +223,7 @@ export async function runIngestionPipeline(
 
         totalImages += 1
       }
-    }
+    } // end: for each batch
 
     const finalDocumentStatus = errors.length > 0 && totalChunks === 0 ? 'ERROR' : 'ACTIVE'
 

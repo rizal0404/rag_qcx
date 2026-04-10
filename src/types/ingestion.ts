@@ -1,5 +1,7 @@
 import type { ContentType, Document, ImageType } from '@/types/database'
 
+export type IngestionExecutionMode = 'auto' | 'inline' | 'worker'
+
 export interface RawImageData {
   file_path: string
   image_type?: ImageType
@@ -33,4 +35,16 @@ export interface IngestedChunk {
 export interface IngestionPreparationParams {
   document: Document
   elements: RawIngestionElement[]
+}
+
+export interface ProcessIngestionRequest {
+  documentId?: string
+  elements?: RawIngestionElement[]
+  chunks?: RawIngestionElement[]
+  text?: string
+  sectionPath?: string | null
+  pageNumbers?: number[]
+  contentType?: ContentType
+  executionMode?: IngestionExecutionMode
+  replaceExisting?: boolean
 }

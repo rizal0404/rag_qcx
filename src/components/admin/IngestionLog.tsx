@@ -1,7 +1,6 @@
 'use client'
 
 import React, { useEffect, useState } from 'react'
-import { createClient } from '@/lib/supabase/client'
 import type { Document, DocumentStatus } from '@/types/database'
 
 interface IngestionLogProps {
@@ -51,25 +50,27 @@ export default function IngestionLog({ refreshKey = 0 }: IngestionLogProps) {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    const supabase = createClient()
-
     const loadEntries = async () => {
       setLoading(true)
 
-      const { data, error } = await supabase
-        .from('documents')
-        .select('*')
-        .order('updated_at', { ascending: false })
-        .limit(8)
+      try {
+        const res = await fetch('/api/documents')
+        if (!res.ok) throw new Error('Failed to load ingestion log')
 
-      if (error) {
+        const json = await res.json()
+        const allDocs = (json.documents || []) as Document[]
+
+        // Sort by updated_at descending and take top 8
+        const sorted = allDocs
+          .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
+          .slice(0, 8)
+
+        setEntries(sorted)
+      } catch (error) {
         console.error('Failed to load ingestion log:', error)
+      } finally {
         setLoading(false)
-        return
       }
-
-      setEntries((data || []) as Document[])
-      setLoading(false)
     }
 
     void loadEntries()

@@ -90,6 +90,12 @@ SUPABASE_SERVICE_ROLE_KEY=eyJxxxx
 ADMIN_BASIC_AUTH_USERNAME=admin
 ADMIN_BASIC_AUTH_PASSWORD=change-this-password
 
+# Ingestion worker
+INGESTION_EXECUTION_MODE=auto
+INGESTION_WORKER_URL=https://your-worker.example.com
+INGESTION_WORKER_SECRET=replace-with-a-shared-secret
+INGESTION_INLINE_MAX_FILE_SIZE_MB=8
+
 # External parser options
 LLAMAPARSE_API_KEY=llx-xxxx
 # DOCLING_WORKER_URL=https://your-worker.railway.app
@@ -101,6 +107,8 @@ LLM_TEMPERATURE=0.1
 LLM_MODEL=google/gemini-2.5-flash
 EMBEDDING_PROVIDER=auto
 EMBEDDING_MODEL=baai/bge-m3
+OPENROUTER_EMBEDDING_MODEL=baai/bge-m3
+OPENAI_EMBEDDING_MODEL=text-embedding-3-large
 EMBEDDING_VECTOR_DIMENSIONS=1024
 RERANK_ENABLED=true
 RERANK_MODEL=cohere/rerank-v3.5
@@ -110,11 +118,15 @@ RERANK_CANDIDATE_MULTIPLIER=4
 Notes:
 - `OPENROUTER_API_KEY` is used for chat generation.
 - Embeddings prefer OpenRouter first, then fall back to direct OpenAI, then local deterministic vectors if no remote provider is usable.
+- `OPENROUTER_EMBEDDING_MODEL` and `OPENAI_EMBEDDING_MODEL` let each provider use a compatible model. `EMBEDDING_MODEL` is kept as a legacy fallback for OpenRouter.
 - Retrieval now uses a two-stage ranker: Supabase hybrid search collects candidates, then OpenRouter reranks them with `cohere/rerank-v3.5`.
 - `EMBEDDING_PROVIDER=auto` keeps that provider order. You can force `openrouter`, `openai`, or `local` if needed.
-- `EMBEDDING_VECTOR_DIMENSIONS` should match the pgvector column size. The default schema now uses `1024` for `bge-m3`.
+- `EMBEDDING_VECTOR_DIMENSIONS` should match the pgvector column size. The default schema now uses `1024`; the OpenAI fallback requests that same size automatically for `text-embedding-3-*`.
 - `SUPABASE_SERVICE_ROLE_KEY` is required for upload, ingestion, and admin-side operations.
 - `ADMIN_BASIC_AUTH_USERNAME` and `ADMIN_BASIC_AUTH_PASSWORD` are required to access `/admin`, `/api/documents`, `/api/ingest/*`, and `/api/chat/sessions/*`.
+- `INGESTION_EXECUTION_MODE` accepts `auto`, `inline`, or `worker`.
+- `INGESTION_WORKER_URL` and `INGESTION_WORKER_SECRET` are required if you want `/api/ingest/process` to hand off heavy jobs to a separate worker deployment.
+- `INGESTION_INLINE_MAX_FILE_SIZE_MB` controls the auto-mode threshold. When a stored PDF is larger than this threshold and no parsed payload is provided, `/api/ingest/process` queues the job to the worker instead of running inline on the web app.
 - `LLAMAPARSE_API_KEY` and `DOCLING_WORKER_URL` are optional until you connect an external parser.
 - After changing `EMBEDDING_MODEL`, re-ingest documents so stored chunk vectors and query vectors come from the same model family.
 
@@ -137,6 +149,12 @@ Or run the SQL manually from:
 
 ```text
 supabase/migrations/001_full_schema.sql
+```
+
+If you already applied the base schema, also apply:
+
+```text
+supabase/migrations/003_add_document_file_size.sql
 ```
 
 The schema creates:
@@ -180,6 +198,25 @@ Production verification:
 npm run build
 ```
 
+## 5.1 Worker Deployment Pattern
+
+For heavier parsing and ingestion workloads, keep chat on Vercel and deploy a second instance of this codebase as an ingestion worker on a long-running Node host.
+
+Recommended split:
+- web app: Vercel, serves chat and admin UI
+- worker app: Railway / Render / Fly.io / self-hosted Node, receives delegated ingestion jobs
+
+Worker requirements:
+- use the same codebase and environment variables for Supabase and LLM providers
+- set the same `INGESTION_WORKER_SECRET` on both deployments
+- point the web app's `INGESTION_WORKER_URL` to the worker deployment base URL
+- ensure the worker host can continue background work after returning `202 Accepted`
+
+Internal worker endpoint:
+- `POST /api/internal/ingest/process`
+- requires `Authorization: Bearer <INGESTION_WORKER_SECRET>`
+- accepts the same JSON body as `/api/ingest/process`
+
 ## 6. Ingestion Workflow
 
 ### Option A: Full parser-assisted ingestion
@@ -206,15 +243,24 @@ curl -X POST http://localhost:3000/api/documents \
 
 Response includes `document.id`.
 
-#### Step 2: send parser output to the ingestion endpoint
+#### Step 2: process the document
 
 `POST /api/ingest/process`
+
+Behavior:
+- if you send `elements`, `chunks`, or `text`, the request runs inline by default
+- if `INGESTION_EXECUTION_MODE=auto`, no parsed payload is provided, and the stored PDF exceeds `INGESTION_INLINE_MAX_FILE_SIZE_MB`, the web app queues the job to the worker and returns `202`
+- if `executionMode` is explicitly set to `worker`, the request is always delegated to the worker
+- if `executionMode` is explicitly set to `inline`, the web app processes the job locally
+
+You can still send parser output directly when an external parser has already done the extraction:
 
 Example body:
 
 ```json
 {
   "documentId": "your-document-uuid",
+  "executionMode": "inline",
   "elements": [
     {
       "content": "The 2-position diverter is intended for ...",
@@ -258,6 +304,18 @@ What the pipeline does:
 - generates multilingual-friendly embeddings from content + metadata
 - stores chunks into Supabase
 - stores image records into `images`
+
+Queued-worker response example:
+
+```json
+{
+  "success": true,
+  "queued": true,
+  "executionMode": "worker",
+  "documentId": "your-document-uuid",
+  "queuedStatus": "EXTRACTING"
+}
+```
 
 ### Option B: lightweight text ingestion for testing
 
